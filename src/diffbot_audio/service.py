@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import shlex
 import signal
 import subprocess
@@ -13,7 +14,7 @@ from typing import Iterable
 
 import grpc
 
-from diffbot_audio.config import AudioConfig, load_config
+from diffbot_audio.config import AudioConfig, ConfigError, load_config
 from diffbot_audio.proto import audio_pb2
 
 LOGGER = logging.getLogger("diffbot_audio")
@@ -57,9 +58,6 @@ class PiperAudioService:
             yield _failed(str(exc))
 
     def _synthesize(self, text: str, wav_path: Path) -> None:
-        if not self._config.piper_model:
-            raise RuntimeError("Piper model path is required. Set DIFFBOT_AUDIO_PIPER_MODEL or --piper-model.")
-
         command = [
             self._config.piper_binary,
             "--model",
@@ -155,7 +153,12 @@ def serve(config: AudioConfig) -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    serve(load_config())
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        LOGGER.error("Invalid config: %s", exc)
+        sys.exit(2)
+    serve(config)
 
 
 def _failed(error: str) -> audio_pb2.SpeakEvent:

@@ -1,0 +1,12 @@
+[grpc]
+host = "0.0.0.0"
+port = 50052
+
+[piper]
+binary = "~/tts/piper/piper/piper"
+model = "~/tts/piper/voices/en_US-lessac-medium.onnx"
+extra_args = []
+
+[playback]
+command = "aplay"
+speaker_device = "default"
