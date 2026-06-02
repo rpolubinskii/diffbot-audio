@@ -1,0 +1,262 @@
+from __future__ import annotations
+
+import logging
+import threading
+import time
+from pathlib import Path
+from typing import Callable
+
+from diffbot_audio.config import AudioConfig
+
+LOGGER = logging.getLogger("diffbot_audio.vtt")
+
+SAMPLE_RATE = 16000
+FRAME_SAMPLES = 1280
+SILENCE_RMS = 500.0
+SILENCE_SECONDS = 0.8
+START_TIMEOUT_SECONDS = 5.0
+MAX_RECORDING_SECONDS = 12.0
+MIN_VOICE_FRAMES = 2
+
+
+class VoiceCommandWorker:
+    def __init__(
+        self,
+        config: AudioConfig,
+        is_speaking: Callable[[], bool],
+        play_sound: Callable[[Path], None],
+        emit_text: Callable[[str], None],
+        emit_error: Callable[[str], None],
+    ) -> None:
+        self._config = config
+        self._is_speaking = is_speaking
+        self._play_sound = play_sound
+        self._emit_text = emit_text
+        self._emit_error = emit_error
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._wake_model: object | None = None
+        self._asr_model: object | None = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._wake_model = self._load_wake_model()
+        self._asr_model = self._load_asr_model()
+        self._thread = threading.Thread(target=self._run, name="diffbot-vtt", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+
+    def _load_wake_model(self) -> object:
+        try:
+            import openwakeword
+            from openwakeword.model import Model
+            from openwakeword.utils import download_models
+        except ImportError as exc:
+            raise RuntimeError("VTT requires openwakeword. Run `uv sync` to install dependencies.") from exc
+
+        model_name = self._config.wake_word.model
+        model_path = self._config.wake_word.model_path
+        if model_path is None and model_name not in openwakeword.MODELS:
+            available = ", ".join(sorted(openwakeword.MODELS))
+            raise RuntimeError(f"openWakeWord model {model_name!r} is unavailable. Available models: {available}.")
+
+        try:
+            if model_path is None:
+                download_models(model_names=[model_name])
+                return Model(wakeword_models=[model_name])
+
+            download_models(model_names=["__diffbot_custom__"])
+            inference_framework = model_path.suffix.removeprefix(".").lower()
+            return Model(wakeword_models=[str(model_path)], inference_framework=inference_framework)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to load openWakeWord model {model_name!r}: {exc}") from exc
+
+    def _load_asr_model(self) -> object:
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError as exc:
+            raise RuntimeError("VTT requires faster-whisper. Run `uv sync` to install dependencies.") from exc
+
+        try:
+            return WhisperModel(self._config.vtt.model, device="auto", compute_type="default")
+        except Exception as exc:
+            raise RuntimeError(f"Failed to load faster-whisper model {self._config.vtt.model!r}: {exc}") from exc
+
+    def _run(self) -> None:
+        try:
+            import sounddevice as sd
+        except ImportError:
+            self._emit_error("VTT requires sounddevice. Run `uv sync` to install dependencies.")
+            return
+
+        try:
+            with sd.InputStream(
+                samplerate=SAMPLE_RATE,
+                channels=1,
+                dtype="int16",
+                blocksize=FRAME_SAMPLES,
+                device=self._config.microphone.device,
+            ) as stream:
+                LOGGER.info("VTT microphone loop started")
+                while not self._stop_event.is_set():
+                    frame = self._read_frame(stream)
+                    if frame is None:
+                        continue
+                    if self._is_speaking():
+                        self._reset_wake_model()
+                        continue
+                    if self._wake_word_triggered(frame):
+                        self._handle_wake_word(stream)
+        except Exception as exc:
+            LOGGER.exception("VTT microphone loop failed")
+            self._emit_error(f"VTT microphone loop failed: {exc}")
+
+    def _read_frame(self, stream: object) -> object | None:
+        import numpy as np
+
+        data, overflowed = stream.read(FRAME_SAMPLES)
+        if overflowed:
+            LOGGER.warning("Microphone input overflowed")
+        if self._stop_event.is_set():
+            return None
+        return np.asarray(data, dtype=np.int16).reshape(-1).copy()
+
+    def _wake_word_triggered(self, frame: object) -> bool:
+        assert self._wake_model is not None
+        predictions = self._wake_model.predict(frame)
+        score = _prediction_score(predictions, self._config.wake_word.model)
+        if score >= self._config.wake_word.threshold:
+            LOGGER.info("Wake word triggered with score %.3f", score)
+            self._reset_wake_model()
+            return True
+        return False
+
+    def _handle_wake_word(self, stream: object) -> None:
+        try:
+            self._play_sound(self._config.sounds.wake_triggered)
+        except Exception as exc:
+            LOGGER.exception("Wake notification sound failed")
+            self._emit_error(f"Wake notification sound failed: {exc}")
+        self._drain_stream(stream, blocks=4)
+
+        frames = self._record_utterance(stream)
+        if not frames:
+            LOGGER.info("Wake word timed out before speech")
+            return
+
+        try:
+            self._play_sound(self._config.sounds.recording_sent)
+        except Exception as exc:
+            LOGGER.exception("Processing notification sound failed")
+            self._emit_error(f"Processing notification sound failed: {exc}")
+        self._drain_stream(stream, blocks=2)
+
+        try:
+            text = self._transcribe(frames)
+        except Exception as exc:
+            LOGGER.exception("Transcription failed")
+            self._emit_error(f"Transcription failed: {exc}")
+            return
+
+        if text:
+            self._emit_text(text)
+        else:
+            self._emit_error("Transcription produced no text.")
+
+    def _record_utterance(self, stream: object) -> list[object]:
+        frames = []
+        voice_frames = 0
+        silence_frames = 0
+        heard_voice = False
+        started_at = time.monotonic()
+        silence_limit = max(1, int(SILENCE_SECONDS / (FRAME_SAMPLES / SAMPLE_RATE)))
+
+        while not self._stop_event.is_set():
+            if self._is_speaking():
+                return []
+
+            frame = self._read_frame(stream)
+            if frame is None:
+                continue
+
+            rms = _rms(frame)
+            if rms >= SILENCE_RMS:
+                heard_voice = True
+                voice_frames += 1
+                silence_frames = 0
+            elif heard_voice:
+                silence_frames += 1
+
+            frames.append(frame)
+            elapsed = time.monotonic() - started_at
+            if not heard_voice and elapsed >= START_TIMEOUT_SECONDS:
+                return []
+            if heard_voice and silence_frames >= silence_limit:
+                break
+            if elapsed >= MAX_RECORDING_SECONDS:
+                break
+
+        if voice_frames < MIN_VOICE_FRAMES:
+            return []
+        return _trim_silence(frames)
+
+    def _transcribe(self, frames: list[object]) -> str:
+        import numpy as np
+
+        assert self._asr_model is not None
+        audio = np.concatenate(frames).astype(np.float32) / 32768.0
+        segments, _info = self._asr_model.transcribe(
+            audio,
+            language=self._config.vtt.language,
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 500},
+        )
+        return " ".join(segment.text.strip() for segment in segments if segment.text.strip()).strip()
+
+    def _drain_stream(self, stream: object, blocks: int) -> None:
+        for _ in range(blocks):
+            if self._stop_event.is_set():
+                return
+            try:
+                stream.read(FRAME_SAMPLES)
+            except Exception:
+                LOGGER.debug("Failed to drain microphone stream", exc_info=True)
+                return
+
+    def _reset_wake_model(self) -> None:
+        if self._wake_model is not None:
+            self._wake_model.reset()
+
+
+def _prediction_score(predictions: dict[str, float], model_name: str) -> float:
+    if model_name in predictions:
+        return float(predictions[model_name])
+    prefix = f"{model_name}_"
+    prefixed_scores = [float(score) for label, score in predictions.items() if label.startswith(prefix)]
+    if prefixed_scores:
+        return max(prefixed_scores)
+    return max((float(score) for score in predictions.values()), default=0.0)
+
+
+def _rms(frame: object) -> float:
+    import numpy as np
+
+    samples = np.asarray(frame, dtype=np.float32)
+    if samples.size == 0:
+        return 0.0
+    return float(np.sqrt(np.mean(samples * samples)))
+
+
+def _trim_silence(frames: list[object]) -> list[object]:
+    first = 0
+    last = len(frames)
+    while first < last and _rms(frames[first]) < SILENCE_RMS:
+        first += 1
+    while last > first and _rms(frames[last - 1]) < SILENCE_RMS:
+        last -= 1
+    return frames[first:last]

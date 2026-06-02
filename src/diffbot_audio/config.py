@@ -35,6 +35,7 @@ class WakeWordConfig:
     enabled: bool
     backend: str
     model: str
+    model_path: Path | None
     threshold: float
 
 
@@ -102,17 +103,24 @@ def load_config_file(path: Path) -> AudioConfig:
     if vtt.enabled and vtt.backend != "faster-whisper":
         raise ConfigError(f"{path}: vtt.backend must be \"faster-whisper\" when VTT is enabled.")
 
+    wake_word_model = _string(wake_word_config, "model", "hey_jarvis")
+    wake_word_model_path = _wake_word_model_path(path, wake_word_model)
     wake_word = WakeWordConfig(
         enabled=_boolean(wake_word_config, "enabled", True),
         backend=_string(wake_word_config, "backend", "openwakeword"),
-        model=_string(wake_word_config, "model", "alexa"),
+        model=wake_word_model,
+        model_path=wake_word_model_path,
         threshold=_float(wake_word_config, "threshold", 0.5),
     )
     if wake_word.enabled and wake_word.backend != "openwakeword":
         raise ConfigError(f"{path}: wake_word.backend must be \"openwakeword\" when wake word is enabled.")
-    if wake_word.enabled and wake_word.model not in SUPPORTED_WAKE_WORD_MODELS:
+    if wake_word.enabled and wake_word.model_path is None and wake_word.model not in SUPPORTED_WAKE_WORD_MODELS:
         supported = ", ".join(sorted(SUPPORTED_WAKE_WORD_MODELS))
-        raise ConfigError(f"{path}: wake_word.model must be one of: {supported}.")
+        raise ConfigError(f"{path}: wake_word.model must be one of: {supported}, or a path to a .onnx/.tflite model.")
+    if wake_word.enabled and wake_word.model_path is not None and not wake_word.model_path.exists():
+        raise ConfigError(f"{path}: wake_word.model path does not exist: {wake_word.model_path}.")
+    if wake_word.enabled and wake_word.model_path is not None and wake_word.model_path.suffix not in {".onnx", ".tflite"}:
+        raise ConfigError(f"{path}: wake_word.model path must end in .onnx or .tflite.")
     if not 0 <= wake_word.threshold <= 1:
         raise ConfigError(f"{path}: wake_word.threshold must be between 0 and 1.")
 
@@ -212,3 +220,11 @@ def _none_if_default(value: str) -> str | None:
     if value == "default":
         return None
     return value
+
+
+def _wake_word_model_path(config_path: Path, model: str) -> Path | None:
+    if model in SUPPORTED_WAKE_WORD_MODELS:
+        return None
+    if model.endswith((".onnx", ".tflite")) or "/" in model:
+        return _path(config_path, model)
+    return None

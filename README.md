@@ -49,6 +49,13 @@ recording_sent = "sounds/switch_007.ogg"
 `playback.command` can be a simple command such as `aplay`, or a template containing `{file}` and optionally `{device}`.
 Notification sounds reuse `playback.command` when possible. If `playback.command` is `aplay` and the sound is OGG, the service defaults to `paplay`; set `sounds.command` to override that.
 
+`wake_word.model` can be a built-in openWakeWord model name (`alexa`, `hey_mycroft`, `hey_jarvis`, `hey_rhasspy`, `weather`, `timer`) or a path to a custom `.onnx`/`.tflite` model. Relative paths are resolved from the config file location:
+
+```toml
+[wake_word]
+model = "models/Robot_20260330_000935.onnx"
+```
+
 ## Run
 
 ```bash

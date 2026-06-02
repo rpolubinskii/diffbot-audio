@@ -20,7 +20,7 @@ language = "en"
 [wake_word]
 enabled = true
 backend = "openwakeword"
-model = "alexa"
+model = "models/Robot_20260330_000935.onnx"
 threshold = 0.5
 
 [microphone]
