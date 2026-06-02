@@ -10,3 +10,22 @@ extra_args = []
 [playback]
 command = "aplay"
 speaker_device = "default"
+
+[vtt]
+enabled = true
+backend = "faster-whisper"
+model = "small"
+language = "en"
+
+[wake_word]
+enabled = true
+backend = "openwakeword"
+model = "alexa"
+threshold = 0.5
+
+[microphone]
+device = "default"
+
+[sounds]
+wake_triggered = "sounds/switch_005.ogg"
+recording_sent = "sounds/switch_007.ogg"

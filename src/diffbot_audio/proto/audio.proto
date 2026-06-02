@@ -7,6 +7,7 @@ option java_package = "com.diffbot.audio.v1";
 
 service AudioService {
   rpc Speak(SpeakRequest) returns (stream SpeakEvent);
+  rpc StreamVoiceCommands(StreamVoiceCommandsRequest) returns (stream VoiceCommandEvent);
 }
 
 message SpeakRequest {
@@ -15,6 +16,13 @@ message SpeakRequest {
 
 message SpeakEvent {
   SpeakState state = 1;
+  string error = 2;
+}
+
+message StreamVoiceCommandsRequest {}
+
+message VoiceCommandEvent {
+  string text = 1;
   string error = 2;
 }
 

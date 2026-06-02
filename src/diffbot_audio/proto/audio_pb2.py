@@ -13,7 +13,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0b\x61udio.proto\x12\x10\x64iffbot.audio.v1\"\x1c\n\x0cSpeakRequest\x12\x0c\n\x04text\x18\x01 \x01(\t\"H\n\nSpeakEvent\x12+\n\x05state\x18\x01 \x01(\x0e\x32\x1c.diffbot.audio.v1.SpeakState\x12\r\n\x05\x65rror\x18\x02 \x01(\t*P\n\nSpeakState\x12\x1b\n\x17SPEAK_STATE_UNSPECIFIED\x10\x00\x12\x0b\n\x07STARTED\x10\x01\x12\x0c\n\x08\x46INISHED\x10\x02\x12\n\n\x06\x46\x41ILED\x10\x03\x32W\n\x0c\x41udioService\x12G\n\x05Speak\x12\x1e.diffbot.audio.v1.SpeakRequest\x1a\x1c.diffbot.audio.v1.SpeakEvent0\x01\x42\x18\n\x14\x63om.diffbot.audio.v1P\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0baudio.proto\x12\x10diffbot.audio.v1"\x1c\n\x0cSpeakRequest\x12\x0c\n\x04text\x18\x01 \x01(\t"H\n\nSpeakEvent\x12+\n\x05state\x18\x01 \x01(\x0e2\x1c.diffbot.audio.v1.SpeakState\x12\r\n\x05error\x18\x02 \x01(\t"\x1c\n\x1aStreamVoiceCommandsRequest"0\n\x11VoiceCommandEvent\x12\x0c\n\x04text\x18\x01 \x01(\t\x12\r\n\x05error\x18\x02 \x01(\t*P\n\nSpeakState\x12\x1b\n\x17SPEAK_STATE_UNSPECIFIED\x10\x00\x12\x0b\n\x07STARTED\x10\x01\x12\x0c\n\x08FINISHED\x10\x02\x12\n\n\x06FAILED\x10\x032\xc3\x01\n\x0cAudioService\x12G\n\x05Speak\x12\x1e.diffbot.audio.v1.SpeakRequest\x1a\x1c.diffbot.audio.v1.SpeakEvent0\x01\x12j\n\x13StreamVoiceCommands\x12,.diffbot.audio.v1.StreamVoiceCommandsRequest\x1a#.diffbot.audio.v1.VoiceCommandEvent0\x01B\x18\n\x14com.diffbot.audio.v1P\x01b\x06proto3')
 
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, globals())
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'audio_pb2', globals())
@@ -21,12 +21,16 @@ if _descriptor._USE_C_DESCRIPTORS == False:
 
   DESCRIPTOR._options = None
   DESCRIPTOR._serialized_options = b'\n\024com.diffbot.audio.v1P\001'
-  _SPEAKSTATE._serialized_start=137
-  _SPEAKSTATE._serialized_end=217
+  _SPEAKSTATE._serialized_start=193
+  _SPEAKSTATE._serialized_end=273
   _SPEAKREQUEST._serialized_start=33
   _SPEAKREQUEST._serialized_end=61
   _SPEAKEVENT._serialized_start=63
   _SPEAKEVENT._serialized_end=135
-  _AUDIOSERVICE._serialized_start=219
-  _AUDIOSERVICE._serialized_end=306
+  _STREAMVOICECOMMANDSREQUEST._serialized_start=137
+  _STREAMVOICECOMMANDSREQUEST._serialized_end=165
+  _VOICECOMMANDEVENT._serialized_start=167
+  _VOICECOMMANDEVENT._serialized_end=215
+  _AUDIOSERVICE._serialized_start=276
+  _AUDIOSERVICE._serialized_end=471
 # @@protoc_insertion_point(module_scope)

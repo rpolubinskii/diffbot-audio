@@ -5,12 +5,17 @@ description = "DiffBot local audio gRPC service"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "faster-whisper>=1.2.1",
     "grpcio>=1.62.0",
+    "numpy>=2.4.6",
+    "openwakeword>=0.6.0",
     "protobuf>=4.25.0",
+    "sounddevice>=0.5.5",
 ]
 
 [project.scripts]
 diffbot-audio = "diffbot_audio.service:main"
+diffbot-audio-listen = "diffbot_audio.client:listen_main"
 diffbot-audio-say = "diffbot_audio.client:main"
 
 [build-system]

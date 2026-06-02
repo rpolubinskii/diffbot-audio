@@ -16,6 +16,48 @@ class AudioConfig:
     piper_extra_args: tuple[str, ...]
     playback_command: str
     speaker_device: str | None
+    vtt: "VttConfig"
+    wake_word: "WakeWordConfig"
+    microphone: "MicrophoneConfig"
+    sounds: "SoundsConfig"
+
+
+@dataclass(frozen=True)
+class VttConfig:
+    enabled: bool
+    backend: str
+    model: str
+    language: str | None
+
+
+@dataclass(frozen=True)
+class WakeWordConfig:
+    enabled: bool
+    backend: str
+    model: str
+    threshold: float
+
+
+@dataclass(frozen=True)
+class MicrophoneConfig:
+    device: str | None
+
+
+@dataclass(frozen=True)
+class SoundsConfig:
+    wake_triggered: Path
+    recording_sent: Path
+    playback_command: str | None
+
+
+SUPPORTED_WAKE_WORD_MODELS = {
+    "alexa",
+    "hey_mycroft",
+    "hey_jarvis",
+    "hey_rhasspy",
+    "weather",
+    "timer",
+}
 
 
 DEFAULT_CONFIG_PATH = Path("config.toml")
@@ -42,10 +84,37 @@ def load_config_file(path: Path) -> AudioConfig:
     grpc_config = _table(data, "grpc")
     piper_config = _table(data, "piper")
     playback_config = _table(data, "playback")
+    vtt_config = _table(data, "vtt")
+    wake_word_config = _table(data, "wake_word")
+    microphone_config = _table(data, "microphone")
+    sounds_config = _table(data, "sounds")
 
     piper_model = _optional_string(piper_config, "model")
     if not piper_model:
         raise ConfigError(f"{path}: piper.model is required.")
+
+    vtt = VttConfig(
+        enabled=_boolean(vtt_config, "enabled", True),
+        backend=_string(vtt_config, "backend", "faster-whisper"),
+        model=_string(vtt_config, "model", "small"),
+        language=_optional_string(vtt_config, "language") or "en",
+    )
+    if vtt.enabled and vtt.backend != "faster-whisper":
+        raise ConfigError(f"{path}: vtt.backend must be \"faster-whisper\" when VTT is enabled.")
+
+    wake_word = WakeWordConfig(
+        enabled=_boolean(wake_word_config, "enabled", True),
+        backend=_string(wake_word_config, "backend", "openwakeword"),
+        model=_string(wake_word_config, "model", "alexa"),
+        threshold=_float(wake_word_config, "threshold", 0.5),
+    )
+    if wake_word.enabled and wake_word.backend != "openwakeword":
+        raise ConfigError(f"{path}: wake_word.backend must be \"openwakeword\" when wake word is enabled.")
+    if wake_word.enabled and wake_word.model not in SUPPORTED_WAKE_WORD_MODELS:
+        supported = ", ".join(sorted(SUPPORTED_WAKE_WORD_MODELS))
+        raise ConfigError(f"{path}: wake_word.model must be one of: {supported}.")
+    if not 0 <= wake_word.threshold <= 1:
+        raise ConfigError(f"{path}: wake_word.threshold must be between 0 and 1.")
 
     return AudioConfig(
         host=_string(grpc_config, "host", "0.0.0.0"),
@@ -55,6 +124,16 @@ def load_config_file(path: Path) -> AudioConfig:
         piper_extra_args=_string_list(piper_config, "extra_args"),
         playback_command=_string(playback_config, "command", "aplay"),
         speaker_device=_optional_string(playback_config, "speaker_device"),
+        vtt=vtt,
+        wake_word=wake_word,
+        microphone=MicrophoneConfig(
+            device=_none_if_default(_string(microphone_config, "device", "default")),
+        ),
+        sounds=SoundsConfig(
+            wake_triggered=_path(path, _string(sounds_config, "wake_triggered", "sounds/switch_005.ogg")),
+            recording_sent=_path(path, _string(sounds_config, "recording_sent", "sounds/switch_007.ogg")),
+            playback_command=_optional_string(sounds_config, "command"),
+        ),
     )
 
 
@@ -101,8 +180,35 @@ def _integer(data: dict[str, Any], key: str, default: int) -> int:
     return value
 
 
+def _float(data: dict[str, Any], key: str, default: float) -> float:
+    value = data.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ConfigError(f"{key} must be a number.")
+    return float(value)
+
+
+def _boolean(data: dict[str, Any], key: str, default: bool) -> bool:
+    value = data.get(key, default)
+    if not isinstance(value, bool):
+        raise ConfigError(f"{key} must be a boolean.")
+    return value
+
+
 def _string_list(data: dict[str, Any], key: str) -> tuple[str, ...]:
     value = data.get(key, [])
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise ConfigError(f"{key} must be a list of strings.")
     return tuple(value)
+
+
+def _path(config_path: Path, value: str) -> Path:
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    return config_path.parent / path
+
+
+def _none_if_default(value: str) -> str | None:
+    if value == "default":
+        return None
+    return value

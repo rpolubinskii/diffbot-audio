@@ -38,5 +38,29 @@ def main() -> None:
             sys.exit(1)
 
 
+def listen_main() -> None:
+    parser = config_arg_parser("Stream diffbot-audio voice commands.")
+    args = parser.parse_args()
+
+    try:
+        config = load_config_file(args.config)
+    except ConfigError as exc:
+        print(f"Invalid config: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    request = audio_pb2.StreamVoiceCommandsRequest()
+    with grpc.insecure_channel(f"{config.host}:{config.port}") as channel:
+        method = channel.unary_stream(
+            "/diffbot.audio.v1.AudioService/StreamVoiceCommands",
+            request_serializer=audio_pb2.StreamVoiceCommandsRequest.SerializeToString,
+            response_deserializer=audio_pb2.VoiceCommandEvent.FromString,
+        )
+        for event in method(request):
+            if event.error:
+                print(f"ERROR: {event.error}")
+            else:
+                print(event.text)
+
+
 if __name__ == "__main__":
     main()
