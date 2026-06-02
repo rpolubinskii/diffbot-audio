@@ -31,6 +31,9 @@ enabled = true
 backend = "faster-whisper"
 model = "small"
 language = "en"
+compute_type = "float32"
+beam_size = 5
+vad_filter = false
 
 [wake_word]
 enabled = true

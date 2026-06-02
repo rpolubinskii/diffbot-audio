@@ -28,6 +28,9 @@ class VttConfig:
     backend: str
     model: str
     language: str | None
+    compute_type: str
+    beam_size: int
+    vad_filter: bool
 
 
 @dataclass(frozen=True)
@@ -99,9 +102,14 @@ def load_config_file(path: Path) -> AudioConfig:
         backend=_string(vtt_config, "backend", "faster-whisper"),
         model=_string(vtt_config, "model", "small"),
         language=_optional_string(vtt_config, "language") or "en",
+        compute_type=_string(vtt_config, "compute_type", "float32"),
+        beam_size=_integer(vtt_config, "beam_size", 5),
+        vad_filter=_boolean(vtt_config, "vad_filter", False),
     )
     if vtt.enabled and vtt.backend != "faster-whisper":
         raise ConfigError(f"{path}: vtt.backend must be \"faster-whisper\" when VTT is enabled.")
+    if vtt.enabled and vtt.beam_size < 1:
+        raise ConfigError(f"{path}: vtt.beam_size must be at least 1.")
 
     wake_word_model = _string(wake_word_config, "model", "hey_jarvis")
     wake_word_model_path = _wake_word_model_path(path, wake_word_model)
@@ -183,7 +191,7 @@ def _optional_string(data: dict[str, Any], key: str) -> str | None:
 
 def _integer(data: dict[str, Any], key: str, default: int) -> int:
     value = data.get(key, default)
-    if not isinstance(value, int):
+    if isinstance(value, bool) or not isinstance(value, int):
         raise ConfigError(f"{key} must be an integer.")
     return value
 

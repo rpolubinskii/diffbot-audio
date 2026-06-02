@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import queue
 import threading
 import time
 from pathlib import Path
@@ -13,10 +14,11 @@ LOGGER = logging.getLogger("diffbot_audio.vtt")
 SAMPLE_RATE = 16000
 FRAME_SAMPLES = 1280
 SILENCE_RMS = 500.0
-SILENCE_SECONDS = 0.8
+SILENCE_SECONDS = 1.2
 START_TIMEOUT_SECONDS = 5.0
 MAX_RECORDING_SECONDS = 12.0
 MIN_VOICE_FRAMES = 2
+TRANSCRIPTION_QUEUE_SIZE = 4
 
 
 class VoiceCommandWorker:
@@ -35,6 +37,8 @@ class VoiceCommandWorker:
         self._emit_error = emit_error
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._asr_thread: threading.Thread | None = None
+        self._transcription_queue: queue.Queue[list[object]] = queue.Queue(maxsize=TRANSCRIPTION_QUEUE_SIZE)
         self._wake_model: object | None = None
         self._asr_model: object | None = None
 
@@ -44,12 +48,16 @@ class VoiceCommandWorker:
         self._wake_model = self._load_wake_model()
         self._asr_model = self._load_asr_model()
         self._thread = threading.Thread(target=self._run, name="diffbot-vtt", daemon=True)
+        self._asr_thread = threading.Thread(target=self._run_transcription, name="diffbot-vtt-asr", daemon=True)
+        self._asr_thread.start()
         self._thread.start()
 
     def stop(self) -> None:
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=2)
+        if self._asr_thread is not None:
+            self._asr_thread.join(timeout=2)
 
     def _load_wake_model(self) -> object:
         try:
@@ -59,6 +67,7 @@ class VoiceCommandWorker:
         except ImportError as exc:
             raise RuntimeError("VTT requires openwakeword. Run `uv sync` to install dependencies.") from exc
 
+        _quiet_onnxruntime()
         model_name = self._config.wake_word.model
         model_path = self._config.wake_word.model_path
         if model_path is None and model_name not in openwakeword.MODELS:
@@ -83,7 +92,7 @@ class VoiceCommandWorker:
             raise RuntimeError("VTT requires faster-whisper. Run `uv sync` to install dependencies.") from exc
 
         try:
-            return WhisperModel(self._config.vtt.model, device="auto", compute_type="default")
+            return WhisperModel(self._config.vtt.model, device="auto", compute_type=self._config.vtt.compute_type)
         except Exception as exc:
             raise RuntimeError(f"Failed to load faster-whisper model {self._config.vtt.model!r}: {exc}") from exc
 
@@ -137,36 +146,58 @@ class VoiceCommandWorker:
         return False
 
     def _handle_wake_word(self, stream: object) -> None:
-        try:
-            self._play_sound(self._config.sounds.wake_triggered)
-        except Exception as exc:
-            LOGGER.exception("Wake notification sound failed")
-            self._emit_error(f"Wake notification sound failed: {exc}")
-        self._drain_stream(stream, blocks=4)
+        self._play_sound_async(self._config.sounds.wake_triggered, "Wake notification sound failed")
 
         frames = self._record_utterance(stream)
         if not frames:
             LOGGER.info("Wake word timed out before speech")
             return
 
-        try:
-            self._play_sound(self._config.sounds.recording_sent)
-        except Exception as exc:
-            LOGGER.exception("Processing notification sound failed")
-            self._emit_error(f"Processing notification sound failed: {exc}")
-        self._drain_stream(stream, blocks=2)
+        self._play_sound_async(self._config.sounds.recording_sent, "Processing notification sound failed")
+        self._queue_transcription(frames)
 
-        try:
-            text = self._transcribe(frames)
-        except Exception as exc:
-            LOGGER.exception("Transcription failed")
-            self._emit_error(f"Transcription failed: {exc}")
-            return
+    def _play_sound_async(self, sound_path: Path, error_prefix: str) -> None:
+        thread = threading.Thread(
+            target=self._play_sound_safely,
+            args=(sound_path, error_prefix),
+            name="diffbot-vtt-sound",
+            daemon=True,
+        )
+        thread.start()
 
-        if text:
-            self._emit_text(text)
-        else:
-            self._emit_error("Transcription produced no text.")
+    def _play_sound_safely(self, sound_path: Path, error_prefix: str) -> None:
+        try:
+            self._play_sound(sound_path)
+        except Exception as exc:
+            LOGGER.exception(error_prefix)
+            self._emit_error(f"{error_prefix}: {exc}")
+
+    def _queue_transcription(self, frames: list[object]) -> None:
+        try:
+            self._transcription_queue.put_nowait(frames)
+        except queue.Full:
+            LOGGER.warning("Dropping voice command because transcription queue is full")
+            self._emit_error("Transcription queue is full.")
+
+    def _run_transcription(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                frames = self._transcription_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            try:
+                text = self._transcribe(frames)
+            except Exception as exc:
+                LOGGER.exception("Transcription failed")
+                self._emit_error(f"Transcription failed: {exc}")
+                continue
+
+            if text:
+                LOGGER.info("Voice command transcribed: %s", text)
+                self._emit_text(text)
+            else:
+                self._emit_error("Transcription produced no text.")
 
     def _record_utterance(self, stream: object) -> list[object]:
         frames = []
@@ -213,8 +244,9 @@ class VoiceCommandWorker:
         segments, _info = self._asr_model.transcribe(
             audio,
             language=self._config.vtt.language,
-            vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 500},
+            beam_size=self._config.vtt.beam_size,
+            vad_filter=self._config.vtt.vad_filter,
+            vad_parameters={"min_silence_duration_ms": 500} if self._config.vtt.vad_filter else None,
         )
         return " ".join(segment.text.strip() for segment in segments if segment.text.strip()).strip()
 
@@ -241,6 +273,14 @@ def _prediction_score(predictions: dict[str, float], model_name: str) -> float:
     if prefixed_scores:
         return max(prefixed_scores)
     return max((float(score) for score in predictions.values()), default=0.0)
+
+
+def _quiet_onnxruntime() -> None:
+    try:
+        import onnxruntime as ort
+    except ImportError:
+        return
+    ort.set_default_logger_severity(3)
 
 
 def _rms(frame: object) -> float:

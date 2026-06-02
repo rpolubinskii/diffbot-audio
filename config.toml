@@ -14,8 +14,11 @@ speaker_device = "default"
 [vtt]
 enabled = true
 backend = "faster-whisper"
-model = "small"
+model = "base"
 language = "en"
+compute_type = "float32"
+beam_size = 5
+vad_filter = false
 
 [wake_word]
 enabled = true

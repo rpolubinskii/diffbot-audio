@@ -36,7 +36,7 @@ class PiperAudioService:
             self._vtt_worker = VoiceCommandWorker(
                 config=self._config,
                 is_speaking=lambda: self.is_speaking,
-                play_sound=self.play_sound,
+                play_sound=lambda path: self.play_sound(path, mark_speaking=False),
                 emit_text=self._voice_commands.emit_text,
                 emit_error=self._voice_commands.emit_error,
             )
@@ -133,14 +133,20 @@ class PiperAudioService:
             stderr=subprocess.PIPE,
         )
 
-    def play_sound(self, sound_path: Path) -> None:
+    def play_sound(self, sound_path: Path, mark_speaking: bool = True) -> None:
         if not sound_path.exists():
             raise RuntimeError(f"Sound file does not exist: {sound_path}")
-        with self._speaking():
-            process = self._start_sound_playback(sound_path)
-            stdout, stderr = process.communicate()
-            if process.returncode != 0:
-                raise RuntimeError(_format_process_error("sound playback", process.returncode, stdout, stderr))
+        if mark_speaking:
+            with self._speaking():
+                self._play_sound_process(sound_path)
+            return
+        self._play_sound_process(sound_path)
+
+    def _play_sound_process(self, sound_path: Path) -> None:
+        process = self._start_sound_playback(sound_path)
+        stdout, stderr = process.communicate()
+        if process.returncode != 0:
+            raise RuntimeError(_format_process_error("sound playback", process.returncode, stdout, stderr))
 
     def _start_sound_playback(self, sound_path: Path) -> subprocess.Popen[str]:
         command = _playback_command(
@@ -227,6 +233,8 @@ def serve(config: AudioConfig) -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("faster_whisper").setLevel(logging.WARNING)
     try:
         config = load_config()
     except ConfigError as exc:
