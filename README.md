@@ -59,26 +59,27 @@ model = "models/Robot_20260330_000935.onnx"
 ## Run
 
 ```bash
-uv sync
-uv run diffbot-audio
+uv python install 3.11
+uv sync --python 3.11
+uv run --python 3.11 diffbot-audio
 ```
 
 Use an explicit config path when needed:
 
 ```bash
-uv run diffbot-audio --config /path/to/config.toml
+uv run --python 3.11 diffbot-audio --config /path/to/config.toml
 ```
 
 ## Smoke Test
 
 ```bash
-uv run diffbot-audio-say "test"
+uv run --python 3.11 diffbot-audio-say "test"
 ```
 
 Or with an explicit config:
 
 ```bash
-uv run diffbot-audio-say --config /path/to/config.toml "test"
+uv run --python 3.11 diffbot-audio-say --config /path/to/config.toml "test"
 ```
 
 The client prints stream states and exits with a non-zero status if the service returns `FAILED`.
@@ -86,7 +87,7 @@ The client prints stream states and exits with a non-zero status if the service 
 Stream finalized voice commands:
 
 ```bash
-uv run diffbot-audio-listen
+uv run --python 3.11 diffbot-audio-listen
 ```
 
 Say the configured wake word, then a short command. The client prints finalized command text or `ERROR: ...` events.

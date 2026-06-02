@@ -3,7 +3,7 @@ name = "diffbot-audio"
 version = "0.1.0"
 description = "DiffBot local audio gRPC service"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.12"
 dependencies = [
     "faster-whisper>=1.2.1",
     "grpcio>=1.62.0",
