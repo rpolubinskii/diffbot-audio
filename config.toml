@@ -24,7 +24,7 @@ model = "models/Robot_20260330_000935.onnx"
 threshold = 0.5
 
 [microphone]
-device = "default"
+device = "0"
 
 [sounds]
 wake_triggered = "sounds/switch_005.ogg"
