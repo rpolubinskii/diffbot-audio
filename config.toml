@@ -27,5 +27,5 @@ threshold = 0.5
 device = "ReSpeaker Lite: USB Audio (hw:0,0)"
 
 [sounds]
-wake_triggered = "sounds/switch_005.ogg"
-recording_sent = "sounds/switch_007.ogg"
+wake_triggered = "sounds/switch_005.wav"
+recording_sent = "sounds/switch_007.wav"
