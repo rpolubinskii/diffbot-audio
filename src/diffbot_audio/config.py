@@ -31,6 +31,7 @@ class VttConfig:
     command_prefixes: tuple[str, ...]
     voice_activity_rms_threshold: float
     voice_activity_cooldown_seconds: float
+    voice_activity_preroll_seconds: float
 
 
 @dataclass(frozen=True)
@@ -201,6 +202,9 @@ def _vtt_config(path: Path, data: dict[str, Any]) -> VttConfig:
     voice_activity_cooldown_seconds = _float(data, "voice_activity_cooldown_seconds", 0.8)
     if voice_activity_cooldown_seconds < 0:
         raise ConfigError(f"{path}: vtt.voice_activity_cooldown_seconds must be at least 0.")
+    voice_activity_preroll_seconds = _float(data, "voice_activity_preroll_seconds", 0.8)
+    if voice_activity_preroll_seconds < 0:
+        raise ConfigError(f"{path}: vtt.voice_activity_preroll_seconds must be at least 0.")
     selected_backend = _string(data, "selected_backend", "") if enabled else _optional_string(data, "selected_backend") or ""
     backends = _table(data, "backends")
 
@@ -213,6 +217,7 @@ def _vtt_config(path: Path, data: dict[str, Any]) -> VttConfig:
             command_prefixes=command_prefixes,
             voice_activity_rms_threshold=voice_activity_rms_threshold,
             voice_activity_cooldown_seconds=voice_activity_cooldown_seconds,
+            voice_activity_preroll_seconds=voice_activity_preroll_seconds,
         )
     if not backends:
         raise ConfigError(f"{path}: vtt.backends must define at least one backend when VTT is enabled.")
@@ -233,6 +238,7 @@ def _vtt_config(path: Path, data: dict[str, Any]) -> VttConfig:
         command_prefixes=command_prefixes,
         voice_activity_rms_threshold=voice_activity_rms_threshold,
         voice_activity_cooldown_seconds=voice_activity_cooldown_seconds,
+        voice_activity_preroll_seconds=voice_activity_preroll_seconds,
     )
 
 

@@ -6,6 +6,7 @@ import re
 import threading
 import time
 from abc import ABC, abstractmethod
+from collections import deque
 from pathlib import Path
 from typing import Callable
 
@@ -112,6 +113,7 @@ class VoiceCommandWorker:
                 device=self._config.microphone.device,
             ) as stream:
                 LOGGER.info("VTT microphone loop started")
+                preroll_frames: deque[object] = deque(maxlen=self._voice_activity_preroll_blocks)
                 while not self._stop_event.is_set():
                     frame = self._read_frame(stream)
                     if frame is None:
@@ -120,11 +122,15 @@ class VoiceCommandWorker:
                         continue
                     if self._is_speaking():
                         self._reset_wake_model()
+                        preroll_frames.clear()
                         continue
                     if self._config.vtt.trigger == "wake_word" and self._wake_word_triggered(frame):
                         self._handle_wake_word(stream)
                     elif self._config.vtt.trigger == "voice_activity" and self._voice_activity_triggered(frame):
-                        self._handle_voice_activity(stream, frame)
+                        self._handle_voice_activity(stream, list(preroll_frames), frame)
+                        preroll_frames.clear()
+                    elif self._config.vtt.trigger == "voice_activity":
+                        preroll_frames.append(frame)
         except Exception as exc:
             LOGGER.exception("VTT microphone loop failed")
             self._emit_error(f"VTT microphone loop failed: {exc}")
@@ -167,8 +173,12 @@ class VoiceCommandWorker:
         self._play_sound_async(self._config.sounds.recording_sent, "Processing notification sound failed")
         self._queue_transcription(frames)
 
-    def _handle_voice_activity(self, stream: object, initial_frame: object) -> None:
-        frames = self._record_utterance(stream, initial_frame=initial_frame)
+    def _handle_voice_activity(self, stream: object, preroll_frames: list[object], initial_frame: object) -> None:
+        frames = self._record_utterance(
+            stream,
+            initial_frames=[*preroll_frames, initial_frame],
+            trim_front=False,
+        )
         if not frames:
             LOGGER.info("Voice activity did not produce enough speech")
             self._cool_down_voice_activity()
@@ -221,6 +231,7 @@ class VoiceCommandWorker:
                 self._emit_error("Transcription produced no text.")
                 continue
 
+            LOGGER.info("Raw transcript: %s", text)
             command_text = self._command_text(text)
             if command_text:
                 LOGGER.info("Voice command transcribed: %s", command_text)
@@ -228,7 +239,12 @@ class VoiceCommandWorker:
             elif self._config.vtt.trigger == "voice_activity":
                 LOGGER.info("Ignoring transcript without command prefix: %s", text)
 
-    def _record_utterance(self, stream: object, initial_frame: object | None = None) -> list[object]:
+    def _record_utterance(
+        self,
+        stream: object,
+        initial_frames: list[object] | None = None,
+        trim_front: bool = True,
+    ) -> list[object]:
         frames = []
         voice_frames = 0
         silence_frames = 0
@@ -248,8 +264,9 @@ class VoiceCommandWorker:
                 silence_frames += 1
             frames.append(frame)
 
-        if initial_frame is not None:
-            add_frame(initial_frame)
+        if initial_frames is not None:
+            for initial_frame in initial_frames:
+                add_frame(initial_frame)
 
         while not self._stop_event.is_set():
             if self._is_speaking():
@@ -270,7 +287,7 @@ class VoiceCommandWorker:
 
         if voice_frames < MIN_VOICE_FRAMES:
             return []
-        return _trim_silence(frames, self._silence_rms)
+        return _trim_silence(frames, self._silence_rms, trim_front=trim_front)
 
     def _transcribe(self, frames: list[object]) -> str:
         assert self._asr_backend is not None
@@ -280,7 +297,12 @@ class VoiceCommandWorker:
         text = text.strip()
         if self._config.vtt.trigger != "voice_activity":
             return text
-        return _strip_command_prefix(text, self._config.vtt.command_prefixes)
+        command_text = _strip_command_prefix(text, self._config.vtt.command_prefixes)
+        if command_text:
+            LOGGER.info("Command prefix matched")
+        else:
+            LOGGER.info("Command prefix did not match")
+        return command_text
 
     @property
     def _silence_rms(self) -> float:
@@ -297,6 +319,11 @@ class VoiceCommandWorker:
         cooldown = self._config.vtt.voice_activity_cooldown_seconds
         if cooldown > 0:
             time.sleep(cooldown)
+
+    @property
+    def _voice_activity_preroll_blocks(self) -> int:
+        seconds_per_block = FRAME_SAMPLES / SAMPLE_RATE
+        return max(0, int(self._config.vtt.voice_activity_preroll_seconds / seconds_per_block))
 
     def _drain_stream(self, stream: object, blocks: int) -> None:
         for _ in range(blocks):
@@ -457,11 +484,12 @@ def _rms(frame: object) -> float:
     return float(np.sqrt(np.mean(samples * samples)))
 
 
-def _trim_silence(frames: list[object], threshold: float = SILENCE_RMS) -> list[object]:
+def _trim_silence(frames: list[object], threshold: float = SILENCE_RMS, trim_front: bool = True) -> list[object]:
     first = 0
     last = len(frames)
-    while first < last and _rms(frames[first]) < threshold:
-        first += 1
+    if trim_front:
+        while first < last and _rms(frames[first]) < threshold:
+            first += 1
     while last > first and _rms(frames[last - 1]) < threshold:
         last -= 1
     return frames[first:last]
