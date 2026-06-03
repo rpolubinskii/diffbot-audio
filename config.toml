@@ -13,7 +13,7 @@ speaker_device = "default"
 
 [vtt]
 enabled = true
-selected_backend = "whisper_base"
+selected_backend = "conformer"
 trigger = "voice_activity"
 command_prefixes = ["robot"]
 voice_activity_rms_threshold = 250.0
