@@ -13,12 +13,19 @@ speaker_device = "default"
 
 [vtt]
 enabled = true
-backend = "faster-whisper"
-model = "base"
-language = "en"
-compute_type = "float32"
-beam_size = 5
-vad_filter = false
+#backend = "faster-whisper"
+#model = "base"
+#language = "en"
+#compute_type = "float32"
+#beam_size = 5
+#vad_filter = false
+# For Jetson-local NVIDIA Riva ASR:
+backend = "riva"
+riva_uri = "localhost:50051"
+riva_language_code = "en-US"
+riva_model = "conformer-en-US-asr-streaming-asr-bls-ensemble"
+riva_automatic_punctuation = false
+riva_use_ssl = false
 
 [wake_word]
 enabled = true

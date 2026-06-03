@@ -31,6 +31,11 @@ class VttConfig:
     compute_type: str
     beam_size: int
     vad_filter: bool
+    riva_uri: str
+    riva_language_code: str
+    riva_model: str
+    riva_automatic_punctuation: bool
+    riva_use_ssl: bool
 
 
 @dataclass(frozen=True)
@@ -105,9 +110,14 @@ def load_config_file(path: Path) -> AudioConfig:
         compute_type=_string(vtt_config, "compute_type", "float32"),
         beam_size=_integer(vtt_config, "beam_size", 5),
         vad_filter=_boolean(vtt_config, "vad_filter", False),
+        riva_uri=_string(vtt_config, "riva_uri", "localhost:50051"),
+        riva_language_code=_string(vtt_config, "riva_language_code", "en-US"),
+        riva_model=_string(vtt_config, "riva_model", "parakeet-1.1b-en-us-asr-streaming-asr-bls-ensemble"),
+        riva_automatic_punctuation=_boolean(vtt_config, "riva_automatic_punctuation", True),
+        riva_use_ssl=_boolean(vtt_config, "riva_use_ssl", False),
     )
-    if vtt.enabled and vtt.backend != "faster-whisper":
-        raise ConfigError(f"{path}: vtt.backend must be \"faster-whisper\" when VTT is enabled.")
+    if vtt.enabled and vtt.backend not in {"faster-whisper", "riva"}:
+        raise ConfigError(f"{path}: vtt.backend must be \"faster-whisper\" or \"riva\" when VTT is enabled.")
     if vtt.enabled and vtt.beam_size < 1:
         raise ConfigError(f"{path}: vtt.beam_size must be at least 1.")
 

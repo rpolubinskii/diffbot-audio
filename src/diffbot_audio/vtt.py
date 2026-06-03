@@ -4,10 +4,11 @@ import logging
 import queue
 import threading
 import time
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Callable
 
-from diffbot_audio.config import AudioConfig
+from diffbot_audio.config import AudioConfig, VttConfig
 
 LOGGER = logging.getLogger("diffbot_audio.vtt")
 
@@ -40,13 +41,13 @@ class VoiceCommandWorker:
         self._asr_thread: threading.Thread | None = None
         self._transcription_queue: queue.Queue[list[object]] = queue.Queue(maxsize=TRANSCRIPTION_QUEUE_SIZE)
         self._wake_model: object | None = None
-        self._asr_model: object | None = None
+        self._asr_backend: AsrBackend | None = None
 
     def start(self) -> None:
         if self._thread is not None:
             return
         self._wake_model = self._load_wake_model()
-        self._asr_model = self._load_asr_model()
+        self._asr_backend = _load_asr_backend(self._config.vtt)
         self._thread = threading.Thread(target=self._run, name="diffbot-vtt", daemon=True)
         self._asr_thread = threading.Thread(target=self._run_transcription, name="diffbot-vtt-asr", daemon=True)
         self._asr_thread.start()
@@ -84,17 +85,6 @@ class VoiceCommandWorker:
             return Model(wakeword_models=[str(model_path)], inference_framework=inference_framework)
         except Exception as exc:
             raise RuntimeError(f"Failed to load openWakeWord model {model_name!r}: {exc}") from exc
-
-    def _load_asr_model(self) -> object:
-        try:
-            from faster_whisper import WhisperModel
-        except ImportError as exc:
-            raise RuntimeError("VTT requires faster-whisper. Run `uv sync` to install dependencies.") from exc
-
-        try:
-            return WhisperModel(self._config.vtt.model, device="auto", compute_type=self._config.vtt.compute_type)
-        except Exception as exc:
-            raise RuntimeError(f"Failed to load faster-whisper model {self._config.vtt.model!r}: {exc}") from exc
 
     def _run(self) -> None:
         try:
@@ -237,18 +227,8 @@ class VoiceCommandWorker:
         return _trim_silence(frames)
 
     def _transcribe(self, frames: list[object]) -> str:
-        import numpy as np
-
-        assert self._asr_model is not None
-        audio = np.concatenate(frames).astype(np.float32) / 32768.0
-        segments, _info = self._asr_model.transcribe(
-            audio,
-            language=self._config.vtt.language,
-            beam_size=self._config.vtt.beam_size,
-            vad_filter=self._config.vtt.vad_filter,
-            vad_parameters={"min_silence_duration_ms": 500} if self._config.vtt.vad_filter else None,
-        )
-        return " ".join(segment.text.strip() for segment in segments if segment.text.strip()).strip()
+        assert self._asr_backend is not None
+        return self._asr_backend.transcribe(frames)
 
     def _drain_stream(self, stream: object, blocks: int) -> None:
         for _ in range(blocks):
@@ -263,6 +243,114 @@ class VoiceCommandWorker:
     def _reset_wake_model(self) -> None:
         if self._wake_model is not None:
             self._wake_model.reset()
+
+
+class AsrBackend(ABC):
+    @abstractmethod
+    def transcribe(self, frames: list[object]) -> str:
+        pass
+
+
+class FasterWhisperAsrBackend(AsrBackend):
+    def __init__(self, config: VttConfig) -> None:
+        self._config = config
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError as exc:
+            raise RuntimeError("VTT requires faster-whisper. Run `uv sync` to install dependencies.") from exc
+
+        try:
+            self._model = WhisperModel(config.model, device="auto", compute_type=config.compute_type)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to load faster-whisper model {config.model!r}: {exc}") from exc
+
+    def transcribe(self, frames: list[object]) -> str:
+        import numpy as np
+
+        audio = np.concatenate(frames).astype(np.float32) / 32768.0
+        segments, _info = self._model.transcribe(
+            audio,
+            language=self._config.language,
+            beam_size=self._config.beam_size,
+            vad_filter=self._config.vad_filter,
+            vad_parameters={"min_silence_duration_ms": 500} if self._config.vad_filter else None,
+        )
+        return " ".join(segment.text.strip() for segment in segments if segment.text.strip()).strip()
+
+
+class RivaAsrBackend(AsrBackend):
+    def __init__(self, config: VttConfig) -> None:
+        self._config = config
+        try:
+            import riva.client
+            import riva.client.proto.riva_asr_pb2 as rasr
+        except ImportError as exc:
+            raise RuntimeError("VTT backend 'riva' requires nvidia-riva-client. Run `uv sync` to install dependencies.") from exc
+
+        self._riva_client = riva.client
+        self._rasr = rasr
+
+        try:
+            auth = riva.client.Auth(uri=config.riva_uri, use_ssl=config.riva_use_ssl)
+            self._service = riva.client.ASRService(auth)
+            self._auth_metadata = auth.get_auth_metadata()
+            self._validate_server_model()
+        except Exception as exc:
+            raise RuntimeError(f"Failed to connect to Riva ASR at {config.riva_uri!r}: {exc}") from exc
+
+    def transcribe(self, frames: list[object]) -> str:
+        import numpy as np
+
+        audio = np.concatenate(frames).astype(np.int16).tobytes()
+        transcripts = []
+        responses = self._service.streaming_response_generator(
+            _chunk_bytes(audio, FRAME_SAMPLES * 2),
+            self._streaming_recognition_config(),
+        )
+        for response in responses:
+            for result in response.results:
+                if result.is_final and result.alternatives:
+                    transcript = result.alternatives[0].transcript.strip()
+                    if transcript:
+                        transcripts.append(transcript)
+        return " ".join(transcripts).strip()
+
+    def _validate_server_model(self) -> None:
+        request = self._rasr.RivaSpeechRecognitionConfigRequest(model_name=self._config.riva_model)
+        response = self._service.stub.GetRivaSpeechRecognitionConfig(request, metadata=self._auth_metadata)
+        model_names = [model.model_name for model in response.model_config]
+        if not model_names:
+            raise RuntimeError(f"Riva ASR model {self._config.riva_model!r} is unavailable.")
+        LOGGER.info("Riva ASR model available: %s", ", ".join(model_names))
+
+    def _recognition_config(self) -> object:
+        config = self._riva_client.RecognitionConfig()
+        config.encoding = self._riva_client.AudioEncoding.LINEAR_PCM
+        config.sample_rate_hertz = SAMPLE_RATE
+        config.language_code = self._config.riva_language_code
+        config.max_alternatives = 1
+        config.audio_channel_count = 1
+        config.enable_automatic_punctuation = self._config.riva_automatic_punctuation
+        config.model = self._config.riva_model
+        return config
+
+    def _streaming_recognition_config(self) -> object:
+        config = self._riva_client.StreamingRecognitionConfig()
+        config.config.CopyFrom(self._recognition_config())
+        config.interim_results = False
+        return config
+
+
+def _load_asr_backend(config: VttConfig) -> AsrBackend:
+    if config.backend == "faster-whisper":
+        return FasterWhisperAsrBackend(config)
+    if config.backend == "riva":
+        return RivaAsrBackend(config)
+    raise RuntimeError(f"Unsupported VTT backend: {config.backend}.")
+
+
+def _chunk_bytes(data: bytes, chunk_size: int) -> list[bytes]:
+    return [data[index : index + chunk_size] for index in range(0, len(data), chunk_size)]
 
 
 def _prediction_score(predictions: dict[str, float], model_name: str) -> float:
