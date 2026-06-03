@@ -27,6 +27,8 @@ class VttConfig:
     enabled: bool
     selected_backend: str
     backend: "VttBackendConfig | None"
+    trigger: str
+    command_prefixes: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -54,7 +56,6 @@ VttBackendConfig = FasterWhisperVttBackendConfig | RivaVttBackendConfig
 
 @dataclass(frozen=True)
 class WakeWordConfig:
-    enabled: bool
     backend: str
     model: str
     model_path: Path | None
@@ -117,24 +118,24 @@ def load_config_file(path: Path) -> AudioConfig:
         raise ConfigError(f"{path}: piper.model is required.")
 
     vtt = _vtt_config(path, vtt_config)
+    wake_word_active = vtt.enabled and vtt.trigger == "wake_word"
 
     wake_word_model = _string(wake_word_config, "model", "hey_jarvis")
     wake_word_model_path = _wake_word_model_path(path, wake_word_model)
     wake_word = WakeWordConfig(
-        enabled=_boolean(wake_word_config, "enabled", True),
         backend=_string(wake_word_config, "backend", "openwakeword"),
         model=wake_word_model,
         model_path=wake_word_model_path,
         threshold=_float(wake_word_config, "threshold", 0.5),
     )
-    if wake_word.enabled and wake_word.backend != "openwakeword":
+    if wake_word_active and wake_word.backend != "openwakeword":
         raise ConfigError(f"{path}: wake_word.backend must be \"openwakeword\" when wake word is enabled.")
-    if wake_word.enabled and wake_word.model_path is None and wake_word.model not in SUPPORTED_WAKE_WORD_MODELS:
+    if wake_word_active and wake_word.model_path is None and wake_word.model not in SUPPORTED_WAKE_WORD_MODELS:
         supported = ", ".join(sorted(SUPPORTED_WAKE_WORD_MODELS))
         raise ConfigError(f"{path}: wake_word.model must be one of: {supported}, or a path to a .onnx/.tflite model.")
-    if wake_word.enabled and wake_word.model_path is not None and not wake_word.model_path.exists():
+    if wake_word_active and wake_word.model_path is not None and not wake_word.model_path.exists():
         raise ConfigError(f"{path}: wake_word.model path does not exist: {wake_word.model_path}.")
-    if wake_word.enabled and wake_word.model_path is not None and wake_word.model_path.suffix not in {".onnx", ".tflite"}:
+    if wake_word_active and wake_word.model_path is not None and wake_word.model_path.suffix not in {".onnx", ".tflite"}:
         raise ConfigError(f"{path}: wake_word.model path must end in .onnx or .tflite.")
     if not 0 <= wake_word.threshold <= 1:
         raise ConfigError(f"{path}: wake_word.threshold must be between 0 and 1.")
@@ -183,11 +184,26 @@ def _table(data: dict[str, Any], key: str) -> dict[str, Any]:
 def _vtt_config(path: Path, data: dict[str, Any]) -> VttConfig:
     _reject_legacy_vtt_keys(path, data)
     enabled = _boolean(data, "enabled", True)
+    trigger = _string(data, "trigger", "wake_word")
+    if trigger not in {"wake_word", "voice_activity"}:
+        raise ConfigError(f"{path}: vtt.trigger must be \"wake_word\" or \"voice_activity\".")
+    command_prefixes = _string_list(data, "command_prefixes") if "command_prefixes" in data else ("robot",)
+    if any(not prefix.strip() for prefix in command_prefixes):
+        raise ConfigError(f"{path}: vtt.command_prefixes must not contain blank strings.")
+    command_prefixes = tuple(prefix.strip() for prefix in command_prefixes)
+    if enabled and trigger == "voice_activity" and not command_prefixes:
+        raise ConfigError(f"{path}: vtt.command_prefixes must define at least one prefix for voice_activity.")
     selected_backend = _string(data, "selected_backend", "") if enabled else _optional_string(data, "selected_backend") or ""
     backends = _table(data, "backends")
 
     if not enabled:
-        return VttConfig(enabled=enabled, selected_backend=selected_backend, backend=None)
+        return VttConfig(
+            enabled=enabled,
+            selected_backend=selected_backend,
+            backend=None,
+            trigger=trigger,
+            command_prefixes=command_prefixes,
+        )
     if not backends:
         raise ConfigError(f"{path}: vtt.backends must define at least one backend when VTT is enabled.")
     if selected_backend not in backends:
@@ -199,7 +215,13 @@ def _vtt_config(path: Path, data: dict[str, Any]) -> VttConfig:
         raise ConfigError(f"{path}: vtt.backends.{selected_backend} must be a TOML table.")
 
     backend = _vtt_backend_config(path, selected_backend, backend_config)
-    return VttConfig(enabled=enabled, selected_backend=selected_backend, backend=backend)
+    return VttConfig(
+        enabled=enabled,
+        selected_backend=selected_backend,
+        backend=backend,
+        trigger=trigger,
+        command_prefixes=command_prefixes,
+    )
 
 
 def _reject_legacy_vtt_keys(path: Path, data: dict[str, Any]) -> None:

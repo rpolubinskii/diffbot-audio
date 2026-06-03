@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import re
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -51,7 +52,8 @@ class VoiceCommandWorker:
     def start(self) -> None:
         if self._thread is not None:
             return
-        self._wake_model = self._load_wake_model()
+        if self._config.vtt.trigger == "wake_word":
+            self._wake_model = self._load_wake_model()
         if self._config.vtt.backend is None:
             raise RuntimeError("VTT is enabled, but no VTT backend profile is selected.")
         self._asr_backend = _load_asr_backend(self._config.vtt.backend)
@@ -116,8 +118,10 @@ class VoiceCommandWorker:
                     if self._is_speaking():
                         self._reset_wake_model()
                         continue
-                    if self._wake_word_triggered(frame):
+                    if self._config.vtt.trigger == "wake_word" and self._wake_word_triggered(frame):
                         self._handle_wake_word(stream)
+                    elif self._config.vtt.trigger == "voice_activity" and self._voice_activity_triggered(frame):
+                        self._handle_voice_activity(stream, frame)
         except Exception as exc:
             LOGGER.exception("VTT microphone loop failed")
             self._emit_error(f"VTT microphone loop failed: {exc}")
@@ -142,12 +146,27 @@ class VoiceCommandWorker:
             return True
         return False
 
+    def _voice_activity_triggered(self, frame: object) -> bool:
+        if _rms(frame) >= SILENCE_RMS:
+            LOGGER.info("Voice activity triggered")
+            return True
+        return False
+
     def _handle_wake_word(self, stream: object) -> None:
         self._play_sound_async(self._config.sounds.wake_triggered, "Wake notification sound failed")
 
         frames = self._record_utterance(stream)
         if not frames:
             LOGGER.info("Wake word timed out before speech")
+            return
+
+        self._play_sound_async(self._config.sounds.recording_sent, "Processing notification sound failed")
+        self._queue_transcription(frames)
+
+    def _handle_voice_activity(self, stream: object, initial_frame: object) -> None:
+        frames = self._record_utterance(stream, initial_frame=initial_frame)
+        if not frames:
+            LOGGER.info("Voice activity did not produce enough speech")
             return
 
         self._play_sound_async(self._config.sounds.recording_sent, "Processing notification sound failed")
@@ -190,19 +209,39 @@ class VoiceCommandWorker:
                 self._emit_error(f"Transcription failed: {exc}")
                 continue
 
-            if text:
-                LOGGER.info("Voice command transcribed: %s", text)
-                self._emit_text(text)
-            else:
+            if not text:
                 self._emit_error("Transcription produced no text.")
+                continue
 
-    def _record_utterance(self, stream: object) -> list[object]:
+            command_text = self._command_text(text)
+            if command_text:
+                LOGGER.info("Voice command transcribed: %s", command_text)
+                self._emit_text(command_text)
+            elif self._config.vtt.trigger == "voice_activity":
+                LOGGER.info("Ignoring transcript without command prefix: %s", text)
+
+    def _record_utterance(self, stream: object, initial_frame: object | None = None) -> list[object]:
         frames = []
         voice_frames = 0
         silence_frames = 0
         heard_voice = False
         started_at = time.monotonic()
         silence_limit = max(1, int(SILENCE_SECONDS / (FRAME_SAMPLES / SAMPLE_RATE)))
+
+        def add_frame(frame: object) -> None:
+            nonlocal heard_voice, silence_frames, voice_frames
+
+            rms = _rms(frame)
+            if rms >= SILENCE_RMS:
+                heard_voice = True
+                voice_frames += 1
+                silence_frames = 0
+            elif heard_voice:
+                silence_frames += 1
+            frames.append(frame)
+
+        if initial_frame is not None:
+            add_frame(initial_frame)
 
         while not self._stop_event.is_set():
             if self._is_speaking():
@@ -212,15 +251,7 @@ class VoiceCommandWorker:
             if frame is None:
                 continue
 
-            rms = _rms(frame)
-            if rms >= SILENCE_RMS:
-                heard_voice = True
-                voice_frames += 1
-                silence_frames = 0
-            elif heard_voice:
-                silence_frames += 1
-
-            frames.append(frame)
+            add_frame(frame)
             elapsed = time.monotonic() - started_at
             if not heard_voice and elapsed >= START_TIMEOUT_SECONDS:
                 return []
@@ -236,6 +267,12 @@ class VoiceCommandWorker:
     def _transcribe(self, frames: list[object]) -> str:
         assert self._asr_backend is not None
         return self._asr_backend.transcribe(frames)
+
+    def _command_text(self, text: str) -> str:
+        text = text.strip()
+        if self._config.vtt.trigger != "voice_activity":
+            return text
+        return _strip_command_prefix(text, self._config.vtt.command_prefixes)
 
     def _drain_stream(self, stream: object, blocks: int) -> None:
         for _ in range(blocks):
@@ -358,6 +395,15 @@ def _load_asr_backend(config: VttBackendConfig) -> AsrBackend:
 
 def _chunk_bytes(data: bytes, chunk_size: int) -> list[bytes]:
     return [data[index : index + chunk_size] for index in range(0, len(data), chunk_size)]
+
+
+def _strip_command_prefix(text: str, prefixes: tuple[str, ...]) -> str:
+    for prefix in sorted(prefixes, key=len, reverse=True):
+        pattern = rf"^\s*{re.escape(prefix)}(?:\s*[,.:;-]\s*|\s+|$)(.*)$"
+        match = re.match(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    return ""
 
 
 def _prediction_score(predictions: dict[str, float], model_name: str) -> float:

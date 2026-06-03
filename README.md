@@ -1,6 +1,6 @@
 # diffbot-audio
 
-Local robot audio service for DiffBot. V1 exposes streaming gRPC `Speak` and `StreamVoiceCommands` RPCs. TTS uses Piper plus a local playback command. VTT uses openWakeWord with either faster-whisper or NVIDIA Riva ASR.
+Local robot audio service for DiffBot. V1 exposes streaming gRPC `Speak` and `StreamVoiceCommands` RPCs. TTS uses Piper plus a local playback command. VTT can be triggered by openWakeWord or voice activity, with either faster-whisper or NVIDIA Riva ASR.
 
 ## Configure
 
@@ -29,6 +29,8 @@ speaker_device = "default"
 [vtt]
 enabled = true
 selected_backend = "whisper_base"
+trigger = "wake_word"
+command_prefixes = ["robot"]
 
 [vtt.backends.whisper_base]
 type = "faster-whisper"
@@ -55,7 +57,6 @@ automatic_punctuation = true
 use_ssl = false
 
 [wake_word]
-enabled = true
 backend = "openwakeword"
 model = "alexa"
 threshold = 0.5
@@ -71,16 +72,28 @@ recording_sent = "sounds/switch_007.ogg"
 `playback.command` can be a simple command such as `aplay`, or a template containing `{file}` and optionally `{device}`.
 Notification sounds reuse `playback.command` when possible. If `playback.command` is `aplay` and the sound is OGG, the service defaults to `paplay`; set `sounds.command` to override that.
 
-`wake_word.model` can be a built-in openWakeWord model name (`alexa`, `hey_mycroft`, `hey_jarvis`, `hey_rhasspy`, `weather`, `timer`) or a path to a custom `.onnx`/`.tflite` model. Relative paths are resolved from the config file location:
+`wake_word` settings are used only when `vtt.trigger = "wake_word"`. The wake word is enabled by selecting that trigger. `wake_word.model` can be a built-in openWakeWord model name (`alexa`, `hey_mycroft`, `hey_jarvis`, `hey_rhasspy`, `weather`, `timer`) or a path to a custom `.onnx`/`.tflite` model. Relative paths are resolved from the config file location:
 
 ```toml
 [wake_word]
 model = "models/Robot_20260330_000935.onnx"
 ```
 
+To run VTT without openWakeWord, use voice-activity trigger mode. The service records speech based on volume/silence, transcribes it, and only emits commands that start with a configured prefix. Prefix matching is case-insensitive and the prefix is stripped before emitting:
+
+```toml
+[vtt]
+enabled = true
+selected_backend = "riva_1_1b"
+trigger = "voice_activity"
+command_prefixes = ["robot"]
+```
+
+With this setup, `robot say hello` emits `say hello`; unrelated speech is ignored.
+
 ### NVIDIA Riva ASR on Jetson
 
-For Jetson-local ASR, run the Riva server locally and select a Riva backend profile, for example `selected_backend = "riva_1_1b"`. The wake-word flow stays local: openWakeWord detects the wake word, this service records a 16 kHz mono utterance, and Riva receives that PCM audio over local gRPC.
+For Jetson-local ASR, run the Riva server locally and select a Riva backend profile, for example `selected_backend = "riva_1_1b"`. The trigger flow stays local: this service records a 16 kHz mono utterance from wake-word or voice-activity detection, and Riva receives that PCM audio over local gRPC.
 
 On JetPack 6 / Ubuntu 22.04, validate the base system:
 
@@ -126,6 +139,8 @@ Use this VTT config when Riva is running:
 [vtt]
 enabled = true
 selected_backend = "riva_1_1b"
+trigger = "voice_activity"
+command_prefixes = ["robot"]
 
 [vtt.backends.riva_1_1b]
 type = "riva"
@@ -172,4 +187,4 @@ Stream finalized voice commands:
 uv run --python 3.11 diffbot-audio-listen
 ```
 
-Say the configured wake word, then a short command. The client prints finalized command text or `ERROR: ...` events.
+Say the configured wake word, then a short command. In voice-activity mode, say a command starting with the configured prefix, such as `robot say hello`. The client prints finalized command text or `ERROR: ...` events.

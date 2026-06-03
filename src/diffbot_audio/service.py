@@ -31,8 +31,6 @@ class PiperAudioService:
         self._voice_commands = _VoiceCommandBroadcaster()
         self._vtt_worker: VoiceCommandWorker | None = None
         if self._config.vtt.enabled:
-            if not self._config.wake_word.enabled:
-                raise RuntimeError("VTT is enabled, but wake_word.enabled is false.")
             self._vtt_worker = VoiceCommandWorker(
                 config=self._config,
                 is_speaking=lambda: self.is_speaking,
