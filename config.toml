@@ -31,7 +31,7 @@ riva_use_ssl = false
 enabled = true
 backend = "openwakeword"
 model = "models/Robot_20260330_000935.onnx"
-threshold = 0.5
+threshold = 0.2
 
 [microphone]
 device = "ReSpeaker Lite: USB Audio (hw:0,0)"
