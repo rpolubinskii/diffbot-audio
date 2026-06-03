@@ -25,17 +25,31 @@ class AudioConfig:
 @dataclass(frozen=True)
 class VttConfig:
     enabled: bool
-    backend: str
+    selected_backend: str
+    backend: "VttBackendConfig | None"
+
+
+@dataclass(frozen=True)
+class FasterWhisperVttBackendConfig:
+    type: str
     model: str
     language: str | None
     compute_type: str
     beam_size: int
     vad_filter: bool
-    riva_uri: str
-    riva_language_code: str
-    riva_model: str
-    riva_automatic_punctuation: bool
-    riva_use_ssl: bool
+
+
+@dataclass(frozen=True)
+class RivaVttBackendConfig:
+    type: str
+    uri: str
+    language_code: str
+    model: str
+    automatic_punctuation: bool
+    use_ssl: bool
+
+
+VttBackendConfig = FasterWhisperVttBackendConfig | RivaVttBackendConfig
 
 
 @dataclass(frozen=True)
@@ -102,24 +116,7 @@ def load_config_file(path: Path) -> AudioConfig:
     if not piper_model:
         raise ConfigError(f"{path}: piper.model is required.")
 
-    vtt = VttConfig(
-        enabled=_boolean(vtt_config, "enabled", True),
-        backend=_string(vtt_config, "backend", "faster-whisper"),
-        model=_string(vtt_config, "model", "small"),
-        language=_optional_string(vtt_config, "language") or "en",
-        compute_type=_string(vtt_config, "compute_type", "float32"),
-        beam_size=_integer(vtt_config, "beam_size", 5),
-        vad_filter=_boolean(vtt_config, "vad_filter", False),
-        riva_uri=_string(vtt_config, "riva_uri", "localhost:50051"),
-        riva_language_code=_string(vtt_config, "riva_language_code", "en-US"),
-        riva_model=_string(vtt_config, "riva_model", "parakeet-1.1b-en-us-asr-streaming-asr-bls-ensemble"),
-        riva_automatic_punctuation=_boolean(vtt_config, "riva_automatic_punctuation", True),
-        riva_use_ssl=_boolean(vtt_config, "riva_use_ssl", False),
-    )
-    if vtt.enabled and vtt.backend not in {"faster-whisper", "riva"}:
-        raise ConfigError(f"{path}: vtt.backend must be \"faster-whisper\" or \"riva\" when VTT is enabled.")
-    if vtt.enabled and vtt.beam_size < 1:
-        raise ConfigError(f"{path}: vtt.beam_size must be at least 1.")
+    vtt = _vtt_config(path, vtt_config)
 
     wake_word_model = _string(wake_word_config, "model", "hey_jarvis")
     wake_word_model_path = _wake_word_model_path(path, wake_word_model)
@@ -181,6 +178,74 @@ def _table(data: dict[str, Any], key: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ConfigError(f"{key} must be a TOML table.")
     return value
+
+
+def _vtt_config(path: Path, data: dict[str, Any]) -> VttConfig:
+    _reject_legacy_vtt_keys(path, data)
+    enabled = _boolean(data, "enabled", True)
+    selected_backend = _string(data, "selected_backend", "") if enabled else _optional_string(data, "selected_backend") or ""
+    backends = _table(data, "backends")
+
+    if not enabled:
+        return VttConfig(enabled=enabled, selected_backend=selected_backend, backend=None)
+    if not backends:
+        raise ConfigError(f"{path}: vtt.backends must define at least one backend when VTT is enabled.")
+    if selected_backend not in backends:
+        available = ", ".join(sorted(backends))
+        raise ConfigError(f"{path}: vtt.selected_backend must name one of vtt.backends: {available}.")
+
+    backend_config = backends[selected_backend]
+    if not isinstance(backend_config, dict):
+        raise ConfigError(f"{path}: vtt.backends.{selected_backend} must be a TOML table.")
+
+    backend = _vtt_backend_config(path, selected_backend, backend_config)
+    return VttConfig(enabled=enabled, selected_backend=selected_backend, backend=backend)
+
+
+def _reject_legacy_vtt_keys(path: Path, data: dict[str, Any]) -> None:
+    legacy_keys = {
+        "backend",
+        "model",
+        "language",
+        "compute_type",
+        "beam_size",
+        "vad_filter",
+        "riva_uri",
+        "riva_language_code",
+        "riva_model",
+        "riva_automatic_punctuation",
+        "riva_use_ssl",
+    }
+    used_keys = sorted(legacy_keys.intersection(data))
+    if used_keys:
+        keys = ", ".join(used_keys)
+        raise ConfigError(f"{path}: move legacy vtt keys to named backend profiles under [vtt.backends.*]: {keys}.")
+
+
+def _vtt_backend_config(path: Path, name: str, data: dict[str, Any]) -> VttBackendConfig:
+    backend_type = _string(data, "type", "")
+    if backend_type == "faster-whisper":
+        beam_size = _integer(data, "beam_size", 5)
+        if beam_size < 1:
+            raise ConfigError(f"{path}: vtt.backends.{name}.beam_size must be at least 1.")
+        return FasterWhisperVttBackendConfig(
+            type=backend_type,
+            model=_string(data, "model", "small"),
+            language=_optional_string(data, "language") or "en",
+            compute_type=_string(data, "compute_type", "float32"),
+            beam_size=beam_size,
+            vad_filter=_boolean(data, "vad_filter", False),
+        )
+    if backend_type == "riva":
+        return RivaVttBackendConfig(
+            type=backend_type,
+            uri=_string(data, "uri", "localhost:50051"),
+            language_code=_string(data, "language_code", "en-US"),
+            model=_string(data, "model", "parakeet-1.1b-en-us-asr-streaming"),
+            automatic_punctuation=_boolean(data, "automatic_punctuation", True),
+            use_ssl=_boolean(data, "use_ssl", False),
+        )
+    raise ConfigError(f"{path}: vtt.backends.{name}.type must be \"faster-whisper\" or \"riva\".")
 
 
 def _string(data: dict[str, Any], key: str, default: str) -> str:

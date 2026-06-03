@@ -28,17 +28,31 @@ speaker_device = "default"
 
 [vtt]
 enabled = true
-backend = "faster-whisper"
+selected_backend = "whisper_base"
+
+[vtt.backends.whisper_base]
+type = "faster-whisper"
 model = "small"
 language = "en"
 compute_type = "float32"
 beam_size = 5
 vad_filter = false
-riva_uri = "localhost:50051"
-riva_language_code = "en-US"
-riva_model = "parakeet-1.1b-en-us-asr-streaming-asr-bls-ensemble"
-riva_automatic_punctuation = true
-riva_use_ssl = false
+
+[vtt.backends.riva_1_1b]
+type = "riva"
+uri = "localhost:50051"
+language_code = "en-US"
+model = "parakeet-1.1b-en-us-asr-streaming"
+automatic_punctuation = true
+use_ssl = false
+
+[vtt.backends.riva_0_6b]
+type = "riva"
+uri = "localhost:50051"
+language_code = "en-US"
+model = "parakeet-0.6b-en-us-asr-streaming"
+automatic_punctuation = true
+use_ssl = false
 
 [wake_word]
 enabled = true
@@ -66,7 +80,7 @@ model = "models/Robot_20260330_000935.onnx"
 
 ### NVIDIA Riva ASR on Jetson
 
-For Jetson-local ASR, run the Riva server locally and set `vtt.backend = "riva"`. The wake-word flow stays local: openWakeWord detects the wake word, this service records a 16 kHz mono utterance, and Riva receives that PCM audio over local gRPC.
+For Jetson-local ASR, run the Riva server locally and select a Riva backend profile, for example `selected_backend = "riva_1_1b"`. The wake-word flow stays local: openWakeWord detects the wake word, this service records a 16 kHz mono utterance, and Riva receives that PCM audio over local gRPC.
 
 On JetPack 6 / Ubuntu 22.04, validate the base system:
 
@@ -91,7 +105,7 @@ service_enabled_asr=true
 service_enabled_tts=false
 service_enabled_nmt=false
 asr_language_code=("en-US")
-asr_acoustic_model=("parakeet-1.1b")
+asr_acoustic_model=("parakeet_1.1b")
 use_asr_streaming_throughput_mode=false
 ```
 
@@ -104,22 +118,25 @@ riva_streaming_asr_client --list_models
 riva_asr_client --audio_file=/opt/riva/wav/en-US_sample.wav
 ```
 
-If Jetson memory is insufficient, change only `asr_acoustic_model` to `parakeet-0.6b` and rerun `bash riva_init.sh`.
+If Jetson memory is insufficient, change only `asr_acoustic_model` to `parakeet_0.6b` and rerun `bash riva_init.sh`.
 
 Use this VTT config when Riva is running:
 
 ```toml
 [vtt]
 enabled = true
-backend = "riva"
-riva_uri = "localhost:50051"
-riva_language_code = "en-US"
-riva_model = "parakeet-1.1b-en-us-asr-streaming-asr-bls-ensemble"
-riva_automatic_punctuation = true
-riva_use_ssl = false
+selected_backend = "riva_1_1b"
+
+[vtt.backends.riva_1_1b]
+type = "riva"
+uri = "localhost:50051"
+language_code = "en-US"
+model = "parakeet-1.1b-en-us-asr-streaming"
+automatic_punctuation = true
+use_ssl = false
 ```
 
-When `backend = "riva"`, service startup fails fast if `nvidia-riva-client` cannot be imported or the configured Riva model cannot be listed from the server.
+When the selected backend profile has `type = "riva"`, service startup fails fast if `nvidia-riva-client` cannot be imported or the configured Riva model cannot be listed from the server. The `model` value must match `riva_streaming_asr_client --list_models`; `parakeet-1.1b-en-us-asr-streaming` is the expected starting value for `asr_acoustic_model=("parakeet_1.1b")`.
 
 ## Run
 

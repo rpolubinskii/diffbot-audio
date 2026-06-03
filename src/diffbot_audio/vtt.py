@@ -8,7 +8,12 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Callable
 
-from diffbot_audio.config import AudioConfig, VttConfig
+from diffbot_audio.config import (
+    AudioConfig,
+    FasterWhisperVttBackendConfig,
+    RivaVttBackendConfig,
+    VttBackendConfig,
+)
 
 LOGGER = logging.getLogger("diffbot_audio.vtt")
 
@@ -47,7 +52,9 @@ class VoiceCommandWorker:
         if self._thread is not None:
             return
         self._wake_model = self._load_wake_model()
-        self._asr_backend = _load_asr_backend(self._config.vtt)
+        if self._config.vtt.backend is None:
+            raise RuntimeError("VTT is enabled, but no VTT backend profile is selected.")
+        self._asr_backend = _load_asr_backend(self._config.vtt.backend)
         self._thread = threading.Thread(target=self._run, name="diffbot-vtt", daemon=True)
         self._asr_thread = threading.Thread(target=self._run_transcription, name="diffbot-vtt-asr", daemon=True)
         self._asr_thread.start()
@@ -252,7 +259,7 @@ class AsrBackend(ABC):
 
 
 class FasterWhisperAsrBackend(AsrBackend):
-    def __init__(self, config: VttConfig) -> None:
+    def __init__(self, config: FasterWhisperVttBackendConfig) -> None:
         self._config = config
         try:
             from faster_whisper import WhisperModel
@@ -279,7 +286,7 @@ class FasterWhisperAsrBackend(AsrBackend):
 
 
 class RivaAsrBackend(AsrBackend):
-    def __init__(self, config: VttConfig) -> None:
+    def __init__(self, config: RivaVttBackendConfig) -> None:
         self._config = config
         try:
             import riva.client
@@ -291,12 +298,12 @@ class RivaAsrBackend(AsrBackend):
         self._rasr = rasr
 
         try:
-            auth = riva.client.Auth(uri=config.riva_uri, use_ssl=config.riva_use_ssl)
+            auth = riva.client.Auth(uri=config.uri, use_ssl=config.use_ssl)
             self._service = riva.client.ASRService(auth)
             self._auth_metadata = auth.get_auth_metadata()
             self._validate_server_model()
         except Exception as exc:
-            raise RuntimeError(f"Failed to connect to Riva ASR at {config.riva_uri!r}: {exc}") from exc
+            raise RuntimeError(f"Failed to connect to Riva ASR at {config.uri!r}: {exc}") from exc
 
     def transcribe(self, frames: list[object]) -> str:
         import numpy as np
@@ -316,22 +323,22 @@ class RivaAsrBackend(AsrBackend):
         return " ".join(transcripts).strip()
 
     def _validate_server_model(self) -> None:
-        request = self._rasr.RivaSpeechRecognitionConfigRequest(model_name=self._config.riva_model)
+        request = self._rasr.RivaSpeechRecognitionConfigRequest(model_name=self._config.model)
         response = self._service.stub.GetRivaSpeechRecognitionConfig(request, metadata=self._auth_metadata)
         model_names = [model.model_name for model in response.model_config]
         if not model_names:
-            raise RuntimeError(f"Riva ASR model {self._config.riva_model!r} is unavailable.")
+            raise RuntimeError(f"Riva ASR model {self._config.model!r} is unavailable.")
         LOGGER.info("Riva ASR model available: %s", ", ".join(model_names))
 
     def _recognition_config(self) -> object:
         config = self._riva_client.RecognitionConfig()
         config.encoding = self._riva_client.AudioEncoding.LINEAR_PCM
         config.sample_rate_hertz = SAMPLE_RATE
-        config.language_code = self._config.riva_language_code
+        config.language_code = self._config.language_code
         config.max_alternatives = 1
         config.audio_channel_count = 1
-        config.enable_automatic_punctuation = self._config.riva_automatic_punctuation
-        config.model = self._config.riva_model
+        config.enable_automatic_punctuation = self._config.automatic_punctuation
+        config.model = self._config.model
         return config
 
     def _streaming_recognition_config(self) -> object:
@@ -341,12 +348,12 @@ class RivaAsrBackend(AsrBackend):
         return config
 
 
-def _load_asr_backend(config: VttConfig) -> AsrBackend:
-    if config.backend == "faster-whisper":
+def _load_asr_backend(config: VttBackendConfig) -> AsrBackend:
+    if config.type == "faster-whisper":
         return FasterWhisperAsrBackend(config)
-    if config.backend == "riva":
+    if config.type == "riva":
         return RivaAsrBackend(config)
-    raise RuntimeError(f"Unsupported VTT backend: {config.backend}.")
+    raise RuntimeError(f"Unsupported VTT backend: {config.type}.")
 
 
 def _chunk_bytes(data: bytes, chunk_size: int) -> list[bytes]:
