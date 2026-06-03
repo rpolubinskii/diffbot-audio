@@ -29,6 +29,8 @@ class VttConfig:
     backend: "VttBackendConfig | None"
     trigger: str
     command_prefixes: tuple[str, ...]
+    voice_activity_rms_threshold: float
+    voice_activity_cooldown_seconds: float
 
 
 @dataclass(frozen=True)
@@ -193,6 +195,12 @@ def _vtt_config(path: Path, data: dict[str, Any]) -> VttConfig:
     command_prefixes = tuple(prefix.strip() for prefix in command_prefixes)
     if enabled and trigger == "voice_activity" and not command_prefixes:
         raise ConfigError(f"{path}: vtt.command_prefixes must define at least one prefix for voice_activity.")
+    voice_activity_rms_threshold = _float(data, "voice_activity_rms_threshold", 250.0)
+    if voice_activity_rms_threshold <= 0:
+        raise ConfigError(f"{path}: vtt.voice_activity_rms_threshold must be greater than 0.")
+    voice_activity_cooldown_seconds = _float(data, "voice_activity_cooldown_seconds", 0.8)
+    if voice_activity_cooldown_seconds < 0:
+        raise ConfigError(f"{path}: vtt.voice_activity_cooldown_seconds must be at least 0.")
     selected_backend = _string(data, "selected_backend", "") if enabled else _optional_string(data, "selected_backend") or ""
     backends = _table(data, "backends")
 
@@ -203,6 +211,8 @@ def _vtt_config(path: Path, data: dict[str, Any]) -> VttConfig:
             backend=None,
             trigger=trigger,
             command_prefixes=command_prefixes,
+            voice_activity_rms_threshold=voice_activity_rms_threshold,
+            voice_activity_cooldown_seconds=voice_activity_cooldown_seconds,
         )
     if not backends:
         raise ConfigError(f"{path}: vtt.backends must define at least one backend when VTT is enabled.")
@@ -221,6 +231,8 @@ def _vtt_config(path: Path, data: dict[str, Any]) -> VttConfig:
         backend=backend,
         trigger=trigger,
         command_prefixes=command_prefixes,
+        voice_activity_rms_threshold=voice_activity_rms_threshold,
+        voice_activity_cooldown_seconds=voice_activity_cooldown_seconds,
     )
 
 

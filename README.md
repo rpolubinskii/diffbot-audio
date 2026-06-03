@@ -31,6 +31,8 @@ enabled = true
 selected_backend = "whisper_base"
 trigger = "wake_word"
 command_prefixes = ["robot"]
+voice_activity_rms_threshold = 250.0
+voice_activity_cooldown_seconds = 0.8
 
 [vtt.backends.whisper_base]
 type = "faster-whisper"
@@ -87,9 +89,12 @@ enabled = true
 selected_backend = "riva_1_1b"
 trigger = "voice_activity"
 command_prefixes = ["robot"]
+voice_activity_rms_threshold = 250.0
+voice_activity_cooldown_seconds = 0.8
 ```
 
 With this setup, `robot say hello` emits `say hello`; unrelated speech is ignored.
+If speech does not trigger reliably, lower `voice_activity_rms_threshold` in small steps, for example `200.0` then `150.0`. If background noise triggers too often, raise it. Voice-activity mode does not play notification sounds while recording, because the microphone can hear them and retrigger.
 
 ### NVIDIA Riva ASR on Jetson
 
@@ -141,6 +146,8 @@ enabled = true
 selected_backend = "riva_1_1b"
 trigger = "voice_activity"
 command_prefixes = ["robot"]
+voice_activity_rms_threshold = 250.0
+voice_activity_cooldown_seconds = 0.8
 
 [vtt.backends.riva_1_1b]
 type = "riva"

@@ -16,6 +16,8 @@ enabled = true
 selected_backend = "whisper_base"
 trigger = "voice_activity"
 command_prefixes = ["robot"]
+voice_activity_rms_threshold = 250.0
+voice_activity_cooldown_seconds = 0.8
 
 [vtt.backends.whisper_base]
 type = "faster-whisper"

@@ -43,6 +43,7 @@ class VoiceCommandWorker:
         self._emit_text = emit_text
         self._emit_error = emit_error
         self._stop_event = threading.Event()
+        self._asr_busy_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._asr_thread: threading.Thread | None = None
         self._transcription_queue: queue.Queue[list[object]] = queue.Queue(maxsize=TRANSCRIPTION_QUEUE_SIZE)
@@ -115,6 +116,8 @@ class VoiceCommandWorker:
                     frame = self._read_frame(stream)
                     if frame is None:
                         continue
+                    if self._voice_activity_backpressure_active():
+                        continue
                     if self._is_speaking():
                         self._reset_wake_model()
                         continue
@@ -147,8 +150,9 @@ class VoiceCommandWorker:
         return False
 
     def _voice_activity_triggered(self, frame: object) -> bool:
-        if _rms(frame) >= SILENCE_RMS:
-            LOGGER.info("Voice activity triggered")
+        rms = _rms(frame)
+        if rms >= self._silence_rms:
+            LOGGER.info("Voice activity triggered with RMS %.1f", rms)
             return True
         return False
 
@@ -167,10 +171,11 @@ class VoiceCommandWorker:
         frames = self._record_utterance(stream, initial_frame=initial_frame)
         if not frames:
             LOGGER.info("Voice activity did not produce enough speech")
+            self._cool_down_voice_activity()
             return
 
-        self._play_sound_async(self._config.sounds.recording_sent, "Processing notification sound failed")
         self._queue_transcription(frames)
+        self._cool_down_voice_activity()
 
     def _play_sound_async(self, sound_path: Path, error_prefix: str) -> None:
         thread = threading.Thread(
@@ -203,11 +208,14 @@ class VoiceCommandWorker:
                 continue
 
             try:
+                self._asr_busy_event.set()
                 text = self._transcribe(frames)
             except Exception as exc:
                 LOGGER.exception("Transcription failed")
                 self._emit_error(f"Transcription failed: {exc}")
                 continue
+            finally:
+                self._asr_busy_event.clear()
 
             if not text:
                 self._emit_error("Transcription produced no text.")
@@ -232,7 +240,7 @@ class VoiceCommandWorker:
             nonlocal heard_voice, silence_frames, voice_frames
 
             rms = _rms(frame)
-            if rms >= SILENCE_RMS:
+            if rms >= self._silence_rms:
                 heard_voice = True
                 voice_frames += 1
                 silence_frames = 0
@@ -262,7 +270,7 @@ class VoiceCommandWorker:
 
         if voice_frames < MIN_VOICE_FRAMES:
             return []
-        return _trim_silence(frames)
+        return _trim_silence(frames, self._silence_rms)
 
     def _transcribe(self, frames: list[object]) -> str:
         assert self._asr_backend is not None
@@ -273,6 +281,22 @@ class VoiceCommandWorker:
         if self._config.vtt.trigger != "voice_activity":
             return text
         return _strip_command_prefix(text, self._config.vtt.command_prefixes)
+
+    @property
+    def _silence_rms(self) -> float:
+        if self._config.vtt.trigger == "voice_activity":
+            return self._config.vtt.voice_activity_rms_threshold
+        return SILENCE_RMS
+
+    def _voice_activity_backpressure_active(self) -> bool:
+        if self._config.vtt.trigger != "voice_activity":
+            return False
+        return self._asr_busy_event.is_set() or not self._transcription_queue.empty()
+
+    def _cool_down_voice_activity(self) -> None:
+        cooldown = self._config.vtt.voice_activity_cooldown_seconds
+        if cooldown > 0:
+            time.sleep(cooldown)
 
     def _drain_stream(self, stream: object, blocks: int) -> None:
         for _ in range(blocks):
@@ -433,11 +457,11 @@ def _rms(frame: object) -> float:
     return float(np.sqrt(np.mean(samples * samples)))
 
 
-def _trim_silence(frames: list[object]) -> list[object]:
+def _trim_silence(frames: list[object], threshold: float = SILENCE_RMS) -> list[object]:
     first = 0
     last = len(frames)
-    while first < last and _rms(frames[first]) < SILENCE_RMS:
+    while first < last and _rms(frames[first]) < threshold:
         first += 1
-    while last > first and _rms(frames[last - 1]) < SILENCE_RMS:
+    while last > first and _rms(frames[last - 1]) < threshold:
         last -= 1
     return frames[first:last]
