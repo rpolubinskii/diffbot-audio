@@ -30,7 +30,7 @@ riva_use_ssl = false
 [wake_word]
 enabled = true
 backend = "openwakeword"
-model = "models/Robot_20260330_000935.onnx"
+model = "models/Hey_Robot_20260401_210600.onnx"
 threshold = 0.2
 
 [microphone]
