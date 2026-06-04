@@ -24,7 +24,6 @@ FRAME_SAMPLES = 1280
 SILENCE_RMS = 500.0
 SILENCE_SECONDS = 1.2
 START_TIMEOUT_SECONDS = 5.0
-MAX_RECORDING_SECONDS = 12.0
 MIN_VOICE_FRAMES = 2
 TRANSCRIPTION_QUEUE_SIZE = 4
 
@@ -281,8 +280,6 @@ class VoiceCommandWorker:
             if not heard_voice and elapsed >= START_TIMEOUT_SECONDS:
                 return []
             if heard_voice and silence_frames >= silence_limit:
-                break
-            if elapsed >= MAX_RECORDING_SECONDS:
                 break
 
         if voice_frames < MIN_VOICE_FRAMES:
