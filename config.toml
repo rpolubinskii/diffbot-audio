@@ -40,7 +40,6 @@ automatic_punctuation = true
 use_ssl = false
 
 [wake_word]
-enabled = false
 backend = "openwakeword"
 model = "models/Hey_Robot_20260401_210600.onnx"
 threshold = 0.2
