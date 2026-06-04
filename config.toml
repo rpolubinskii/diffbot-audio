@@ -14,7 +14,7 @@ speaker_device = "default"
 [vtt]
 enabled = true
 selected_backend = "conformer"
-trigger = "voice_activity"
+trigger = "wake_word"
 command_prefixes = ["robot"]
 voice_activity_rms_threshold = 250.0
 voice_activity_cooldown_seconds = 1.2
