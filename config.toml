@@ -47,7 +47,7 @@ use_ssl = false
 [wake_word]
 backend = "openwakeword"
 model = "models/Hey_Robot_20260401_210600.onnx"
-threshold = 0.2
+threshold = 0.35
 
 [microphone]
 device = "ReSpeaker Lite: USB Audio (hw:0,0)"
