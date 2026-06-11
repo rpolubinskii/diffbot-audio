@@ -4,7 +4,7 @@ port = 50052
 
 [piper]
 binary = "/home/jetson/tts/piper/piper/piper"
-model = "/home/jetson/tts/piper/voices/en_US-lessac-medium.onnx"
+model = "/home/jetson/tts/piper/voices/en_US-danny-low.onnx"
 extra_args = []
 
 [playback]
