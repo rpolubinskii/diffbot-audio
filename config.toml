@@ -12,7 +12,7 @@ command = "aplay"
 speaker_device = "default"
 
 [vtt]
-enabled = true
+enabled = false
 selected_backend = "conformer"
 trigger = "wake_word"
 command_prefixes = ["robot"]
